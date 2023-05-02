@@ -15,21 +15,47 @@ import {
   cleanConversationHistory,
   cleanSelectedConversation,
 } from '@/utils/app/clean';
-import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TEMPERATURE } from '@/utils/app/const';
 import {
-  saveConversation,
-  saveConversations,
-  updateConversation,
-} from '@/utils/app/conversation';
-import { saveFolders } from '@/utils/app/folders';
-import { savePrompts } from '@/utils/app/prompts';
-import { getSettings } from '@/utils/app/settings';
+  DEFAULT_SYSTEM_PROMPT,
+  DEFAULT_TEMPERATURE,
+  STORAGE_TYPE,
+} from '@/utils/app/const';
+import {
+  storageCreateConversation,
+  storageUpdateConversation,
+} from '@/utils/app/storage/conversation';
+import {
+  storageGetConversations,
+  storageUpdateConversations,
+} from '@/utils/app/storage/conversations';
+import {
+  storageCreateFolder,
+  storageDeleteFolder,
+  storageUpdateFolder,
+} from '@/utils/app/storage/folder';
+import { storageGetFolders } from '@/utils/app/storage/folders';
+import { storageUpdateMessage } from '@/utils/app/storage/message';
+import {
+  storageCreateMessages,
+  storageDeleteMessages,
+  storageUpdateMessages,
+} from '@/utils/app/storage/messages';
+import {
+  storageGetPrompts,
+  storageUpdatePrompts,
+} from '@/utils/app/storage/prompts';
+import {
+  getSelectedConversation,
+  saveSelectedConversation,
+} from '@/utils/app/storage/selectedConversation';
+import { getSettings } from '@/utils/app/storage/settings';
 
-import { Conversation } from '@/types/chat';
+import { Conversation, Message } from '@/types/chat';
 import { KeyValuePair } from '@/types/data';
-import { FolderInterface, FolderType } from '@/types/folder';
+import { FolderType } from '@/types/folder';
 import { OpenAIModelID, OpenAIModels, fallbackModelID } from '@/types/openai';
 import { Prompt } from '@/types/prompt';
+import { StorageType } from '@/types/storage';
 
 import { Chat } from '@/components/Chat/Chat';
 import { Chatbar } from '@/components/Chatbar/Chatbar';
@@ -45,12 +71,14 @@ interface Props {
   serverSideApiKeyIsSet: boolean;
   serverSidePluginKeysSet: boolean;
   defaultModelId: OpenAIModelID;
+  storageType: StorageType;
 }
 
 const Home = ({
   serverSideApiKeyIsSet,
   serverSidePluginKeysSet,
   defaultModelId,
+  storageType,
 }: Props) => {
   const { t } = useTranslation('chat');
   const { getModels } = useApiService();
@@ -107,28 +135,25 @@ const Home = ({
       value: conversation,
     });
 
-    saveConversation(conversation);
+    saveSelectedConversation(conversation);
   };
 
   // FOLDER OPERATIONS  --------------------------------------------
 
-  const handleCreateFolder = (name: string, type: FolderType) => {
-    const newFolder: FolderInterface = {
-      id: uuidv4(),
+  const handleCreateFolder = async (name: string, type: FolderType) => {
+    const updatedFolders = storageCreateFolder(
+      storageType,
       name,
       type,
-    };
-
-    const updatedFolders = [...folders, newFolder];
+      folders,
+    );
 
     dispatch({ field: 'folders', value: updatedFolders });
-    saveFolders(updatedFolders);
   };
 
-  const handleDeleteFolder = (folderId: string) => {
+  const handleDeleteFolder = async (folderId: string) => {
     const updatedFolders = folders.filter((f) => f.id !== folderId);
     dispatch({ field: 'folders', value: updatedFolders });
-    saveFolders(updatedFolders);
 
     const updatedConversations: Conversation[] = conversations.map((c) => {
       if (c.folderId === folderId) {
@@ -142,7 +167,6 @@ const Home = ({
     });
 
     dispatch({ field: 'conversations', value: updatedConversations });
-    saveConversations(updatedConversations);
 
     const updatedPrompts: Prompt[] = prompts.map((p) => {
       if (p.folderId === folderId) {
@@ -156,34 +180,31 @@ const Home = ({
     });
 
     dispatch({ field: 'prompts', value: updatedPrompts });
-    savePrompts(updatedPrompts);
+
+    await storageUpdateConversations(storageType, updatedConversations);
+    await storageUpdatePrompts(storageType, updatedPrompts);
+    storageDeleteFolder(storageType, folderId, folders);
   };
 
-  const handleUpdateFolder = (folderId: string, name: string) => {
-    const updatedFolders = folders.map((f) => {
-      if (f.id === folderId) {
-        return {
-          ...f,
-          name,
-        };
-      }
-
-      return f;
-    });
+  const handleUpdateFolder = async (folderId: string, name: string) => {
+    const updatedFolders = storageUpdateFolder(
+      storageType,
+      folderId,
+      name,
+      folders,
+    );
 
     dispatch({ field: 'folders', value: updatedFolders });
-
-    saveFolders(updatedFolders);
   };
 
   // CONVERSATION OPERATIONS  --------------------------------------------
 
-  const handleNewConversation = () => {
+  const handleNewConversation = async () => {
     const lastConversation = conversations[conversations.length - 1];
 
     const newConversation: Conversation = {
       id: uuidv4(),
-      name: t('New Conversation'),
+      name: `${t('New Conversation')}`,
       messages: [],
       model: lastConversation?.model || {
         id: OpenAIModels[defaultModelId].id,
@@ -192,17 +213,19 @@ const Home = ({
         tokenLimit: OpenAIModels[defaultModelId].tokenLimit,
       },
       prompt: DEFAULT_SYSTEM_PROMPT,
-      temperature: lastConversation?.temperature ?? DEFAULT_TEMPERATURE,
+      temperature: DEFAULT_TEMPERATURE,
       folderId: null,
     };
 
-    const updatedConversations = [...conversations, newConversation];
-
+    const updatedConversations = storageCreateConversation(
+      storageType,
+      newConversation,
+      conversations,
+    );
     dispatch({ field: 'selectedConversation', value: newConversation });
     dispatch({ field: 'conversations', value: updatedConversations });
 
-    saveConversation(newConversation);
-    saveConversations(updatedConversations);
+    saveSelectedConversation(newConversation);
 
     dispatch({ field: 'loading', value: false });
   };
@@ -216,13 +239,53 @@ const Home = ({
       [data.key]: data.value,
     };
 
-    const { single, all } = updateConversation(
-      updatedConversation,
-      conversations,
-    );
+    let update: {
+      single: Conversation;
+      all: Conversation[];
+    };
 
-    dispatch({ field: 'selectedConversation', value: single });
-    dispatch({ field: 'conversations', value: all });
+    if (data.key === 'messages') {
+      const messages = conversation.messages;
+      const updatedMessageList = data.value as Message[];
+
+      const deletedMessages = messages.filter(
+        (m) => !updatedMessageList.includes(m),
+      );
+
+      const updatedMessages = messages.filter((m) =>
+        updatedMessageList.includes(m),
+      );
+
+      const deletedMessageIds = deletedMessages.map((m) => m.id);
+
+      const cleaned = storageDeleteMessages(
+        storageType,
+        deletedMessageIds,
+        conversation,
+        messages,
+        conversations,
+      );
+
+      const cleanConversation = cleaned.single;
+      const cleanConversations = cleaned.all;
+
+      update = storageUpdateMessages(
+        storageType,
+        cleanConversation,
+        updatedMessages,
+        cleanConversations,
+      );
+    } else {
+      update = storageUpdateConversation(
+        storageType,
+        updatedConversation,
+        conversations,
+      );
+    }
+
+    dispatch({ field: 'selectedConversation', value: update.single });
+    dispatch({ field: 'conversations', value: update.all });
+    saveSelectedConversation(update.single);
   };
 
   // EFFECTS  --------------------------------------------
@@ -231,11 +294,12 @@ const Home = ({
     if (window.innerWidth < 640) {
       dispatch({ field: 'showChatbar', value: false });
     }
-  }, [selectedConversation]);
+  }, [dispatch, selectedConversation]);
 
   useEffect(() => {
     defaultModelId &&
       dispatch({ field: 'defaultModelId', value: defaultModelId });
+    storageType && dispatch({ field: 'storageType', value: storageType });
     serverSideApiKeyIsSet &&
       dispatch({
         field: 'serverSideApiKeyIsSet',
@@ -246,7 +310,13 @@ const Home = ({
         field: 'serverSidePluginKeysSet',
         value: serverSidePluginKeysSet,
       });
-  }, [defaultModelId, serverSideApiKeyIsSet, serverSidePluginKeysSet]);
+  }, [
+    defaultModelId,
+    storageType,
+    serverSideApiKeyIsSet,
+    serverSidePluginKeysSet,
+    dispatch,
+  ]);
 
   // ON LOAD --------------------------------------------
 
@@ -292,28 +362,30 @@ const Home = ({
       dispatch({ field: 'showPromptbar', value: showPromptbar === 'true' });
     }
 
-    const folders = localStorage.getItem('folders');
-    if (folders) {
-      dispatch({ field: 'folders', value: JSON.parse(folders) });
-    }
+    storageGetFolders(storageType).then((folders) => {
+      if (folders) {
+        dispatch({ field: 'folders', value: folders });
+      }
+    });
 
-    const prompts = localStorage.getItem('prompts');
-    if (prompts) {
-      dispatch({ field: 'prompts', value: JSON.parse(prompts) });
-    }
+    storageGetPrompts(storageType).then((prompts) => {
+      if (prompts) {
+        dispatch({ field: 'prompts', value: prompts });
+      }
+    });
 
-    const conversationHistory = localStorage.getItem('conversationHistory');
-    if (conversationHistory) {
-      const parsedConversationHistory: Conversation[] =
-        JSON.parse(conversationHistory);
-      const cleanedConversationHistory = cleanConversationHistory(
-        parsedConversationHistory,
-      );
+    storageGetConversations(storageType).then((conversationHistory) => {
+      if (conversationHistory) {
+        const parsedConversationHistory: Conversation[] = conversationHistory;
+        const cleanedConversationHistory = cleanConversationHistory(
+          parsedConversationHistory,
+        );
 
-      dispatch({ field: 'conversations', value: cleanedConversationHistory });
-    }
+        dispatch({ field: 'conversations', value: cleanedConversationHistory });
+      }
+    });
 
-    const selectedConversation = localStorage.getItem('selectedConversation');
+    const selectedConversation = getSelectedConversation();
     if (selectedConversation) {
       const parsedSelectedConversation: Conversation =
         JSON.parse(selectedConversation);
@@ -326,22 +398,22 @@ const Home = ({
         value: cleanedSelectedConversation,
       });
     } else {
-      const lastConversation = conversations[conversations.length - 1];
       dispatch({
         field: 'selectedConversation',
         value: {
           id: uuidv4(),
-          name: t('New Conversation'),
+          name: 'New conversation',
           messages: [],
           model: OpenAIModels[defaultModelId],
           prompt: DEFAULT_SYSTEM_PROMPT,
-          temperature: lastConversation?.temperature ?? DEFAULT_TEMPERATURE,
+          temperature: DEFAULT_TEMPERATURE,
           folderId: null,
         },
       });
     }
   }, [
     defaultModelId,
+    storageType,
     dispatch,
     serverSideApiKeyIsSet,
     serverSidePluginKeysSet,
@@ -404,6 +476,8 @@ export const getServerSideProps: GetServerSideProps = async ({ locale }) => {
       process.env.DEFAULT_MODEL) ||
     fallbackModelID;
 
+  const storageType = STORAGE_TYPE;
+
   let serverSidePluginKeysSet = false;
 
   const googleApiKey = process.env.GOOGLE_API_KEY;
@@ -417,6 +491,7 @@ export const getServerSideProps: GetServerSideProps = async ({ locale }) => {
     props: {
       serverSideApiKeyIsSet: !!process.env.OPENAI_API_KEY,
       defaultModelId,
+      storageType,
       serverSidePluginKeysSet,
       ...(await serverSideTranslations(locale ?? 'en', [
         'common',
@@ -424,7 +499,6 @@ export const getServerSideProps: GetServerSideProps = async ({ locale }) => {
         'sidebar',
         'markdown',
         'promptbar',
-        'settings',
       ])),
     },
   };

@@ -15,7 +15,8 @@ export const config = {
 
 const handler = async (req: Request): Promise<Response> => {
   try {
-    const { model, messages, key, prompt, temperature } = (await req.json()) as ChatBody;
+    const { model, messages, key, prompt, temperature } =
+      (await req.json()) as ChatBody;
 
     await init((imports) => WebAssembly.instantiate(wasm, imports));
     const encoding = new Tiktoken(
@@ -36,23 +37,44 @@ const handler = async (req: Request): Promise<Response> => {
 
     const prompt_tokens = encoding.encode(promptToSend);
 
-    let tokenCount = prompt_tokens.length;
-    let messagesToSend: Message[] = [];
+    let tokens_per_message = 0;
+    if (model.name == 'GPT-3.5') {
+      tokens_per_message = 5;
+    } else if (model.name == 'GPT-4' || model.name == 'GPT-4-32K') {
+      tokens_per_message = 4;
+    }
+
+    let tokenCount = prompt_tokens.length + tokens_per_message;
+    let messagesToSend: any[] = [];
 
     for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
+      const message = {
+        role: messages[i].role,
+        content: messages[i].content,
+      };
+
       const tokens = encoding.encode(message.content);
 
-      if (tokenCount + tokens.length + 1000 > model.tokenLimit) {
+      if (tokenCount + tokens.length > model.requestLimit) {
         break;
       }
-      tokenCount += tokens.length;
+      tokenCount += tokens.length + tokens_per_message;
       messagesToSend = [message, ...messagesToSend];
     }
 
+    // every reply is primed with <|start|>assistant<|message|>
+    tokenCount += 3;
+
     encoding.free();
 
-    const stream = await OpenAIStream(model, promptToSend, temperatureToUse, key, messagesToSend);
+    const stream = await OpenAIStream(
+      model,
+      promptToSend,
+      temperatureToUse,
+      key,
+      messagesToSend,
+      tokenCount,
+    );
 
     return new Response(stream);
   } catch (error) {
