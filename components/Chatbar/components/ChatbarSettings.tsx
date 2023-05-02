@@ -1,5 +1,5 @@
 import { IconFileExport, IconLogout, IconSettings } from '@tabler/icons-react';
-import { signOut } from 'next-auth/react';
+import { signOut, signIn } from 'next-auth/react';
 import { useContext, useState } from 'react';
 
 import { useTranslation } from 'next-i18next';
@@ -19,7 +19,7 @@ import { PluginKeys } from './PluginKeys';
 
 export const ChatbarSettings = () => {
   const { t } = useTranslation('sidebar');
-  const [isSettingDialogOpen, setIsSettingDialog] = useState<boolean>(false);
+  const [isSettingDialogOpen, setIsSettingDialog] = useState<boolean>(true);
 
   const {
     state: {
@@ -65,6 +65,12 @@ export const ChatbarSettings = () => {
       ) : null}
 
       {!serverSidePluginKeysSet ? <PluginKeys /> : null}
+
+      <SidebarButton
+          text={t('Log In')}
+          icon={<IconLogout size={18} />}
+          onClick={() => signIn()}
+        />
 
       {NEXT_PUBLIC_NEXTAUTH_ENABLED && (
         <SidebarButton
